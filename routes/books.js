@@ -1,121 +1,157 @@
-const express = require('express');
-const router = express.Router();
+const express = require('express')
+const router = express.Router()
+const Book = require('../models/book')
+const Author = require('../models/author')
+const imageMimeTypes = ['image/jpeg', 'image/png', 'images/gif']
 
-const Book = require('../models/book');
+// All Books Route
+router.get('/', async (req, res) => {
+  let query = Book.find()
+  if (req.query.title != null && req.query.title != '') {
+    query = query.regex('title', new RegExp(req.query.title, 'i'))
+  }
+  if (req.query.publishedBefore != null && req.query.publishedBefore != '') {
+    query = query.lte('publishDate', req.query.publishedBefore)
+  }
+  if (req.query.publishedAfter != null && req.query.publishedAfter != '') {
+    query = query.gte('publishDate', req.query.publishedAfter)
+  }
+  try {
+    const books = await query.exec()
+    res.render('books/index', {
+      books: books,
+      searchOptions: req.query
+    })
+  } catch {
+    res.redirect('/')
+  }
+})
 
+// New Book Route
+router.get('/new', async (req, res) => {
+  renderNewPage(res, new Book())
+})
 
-//get routes starts here
-router.get('/', (req, res) => {
-    Book.find({})
-        .then(books => {
-            res.render('index', { books: books });
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        })
+// Create Book Route
+router.post('/', async (req, res) => {
+  const book = new Book({
+    title: req.body.title,
+    author: req.body.author,
+    publishDate: new Date(req.body.publishDate),
+    pageCount: req.body.pageCount,
+    description: req.body.description
+  })
+  saveCover(book, req.body.cover)
 
-});
+  try {
+    const newBook = await book.save()
+    res.redirect(`books/${newBook.id}`)
+  } catch {
+    renderNewPage(res, book, true)
+  }
+})
 
-router.get('/book/new', (req, res) => {
-    res.render('new');
-});
+// Show Book Route
+router.get('/:id', async (req, res) => {
+  try {
+    const book = await Book.findById(req.params.id)
+                           .populate('author')
+                           .exec()
+    res.render('books/show', { book: book })
+  } catch {
+    res.redirect('/')
+  }
+})
 
-router.get('/book/search', (req, res) => {
-    res.render('search', { book: "" });
-});
+// Edit Book Route
+router.get('/:id/edit', async (req, res) => {
+  try {
+    const book = await Book.findById(req.params.id)
+    renderEditPage(res, book)
+  } catch {
+    res.redirect('/')
+  }
+})
 
-router.get('/book', (req, res) => {
-    let searchQuery = { name: req.query.name };
+// Update Book Route
+router.put('/:id', async (req, res) => {
+  let book
 
-    Book.findOne(searchQuery)
-        .then(book => {
-            res.render('search', { book: book });
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        });
+  try {
+    book = await Book.findById(req.params.id)
+    book.title = req.body.title
+    book.author = req.body.author
+    book.publishDate = new Date(req.body.publishDate)
+    book.pageCount = req.body.pageCount
+    book.description = req.body.description
+    if (req.body.cover != null && req.body.cover !== '') {
+      saveCover(book, req.body.cover)
+    }
+    await book.save()
+    res.redirect(`/books/${book.id}`)
+  } catch {
+    if (book != null) {
+      renderEditPage(res, book, true)
+    } else {
+      redirect('/')
+    }
+  }
+})
 
-});
+// Delete Book Page
+router.delete('/:id', async (req, res) => {
+  let book
+  try {
+    book = await Book.findById(req.params.id)
+    await book.remove()
+    res.redirect('/books')
+  } catch {
+    if (book != null) {
+      res.render('books/show', {
+        book: book,
+        errorMessage: 'Could not remove book'
+      })
+    } else {
+      res.redirect('/')
+    }
+  }
+})
 
-router.get('/edit/:id', (req, res) => {
+async function renderNewPage(res, book, hasError = false) {
+  renderFormPage(res, book, 'new', hasError)
+}
 
-    let searchQuery = { _id: req.params.id };
-    Book.findOne(searchQuery)
-        .then(book => {
-            res.render('edit', { book: book });
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        });
+async function renderEditPage(res, book, hasError = false) {
+  renderFormPage(res, book, 'edit', hasError)
+}
 
-});
+async function renderFormPage(res, book, form, hasError = false) {
+  try {
+    const authors = await Author.find({})
+    const params = {
+      authors: authors,
+      book: book
+    }
+    if (hasError) {
+      if (form === 'edit') {
+        params.errorMessage = 'Error Updating Book'
+      } else {
+        params.errorMessage = 'Error Creating Book'
+      }
+    }
+    res.render(`books/${form}`, params)
+  } catch {
+    res.redirect('/books')
+  }
+}
 
-//get routes ends here
+function saveCover(book, coverEncoded) {
+  if (coverEncoded == null) return
+  const cover = JSON.parse(coverEncoded)
+  if (cover != null && imageMimeTypes.includes(cover.type)) {
+    book.coverImage = new Buffer.from(cover.data, 'base64')
+    book.coverImageType = cover.type
+  }
+}
 
-
-//post routes starts here
-router.post('/book/new', (req, res) => {
-    let newbook = {
-        name: req.body.name,
-        designation: req.body.designation,
-        salary: req.body.salary
-    };
-
-    Book.create(newBook)
-        .then(book => {
-            req.flash('success_msg', 'Book data added to database successfully.')
-            res.redirect('/');
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        });
-});
-
-//post routes end here
-
-//put routes starts here
-
-router.put('/edit/:id', (req, res) => {
-    let searchQuery = { _id: req.params.id };
-
-    Book.updateOne(searchQuery, {
-            $set: {
-                name: req.body.name,
-                designation: req.body.designation,
-                salary: req.body.salary
-            }
-        })
-        .then(book => {
-            req.flash('success_msg', 'Book data updated successfully.')
-            res.redirect('/');
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        });
-});
-
-//put routes ends here
-
-
-//delete routes starts here
-router.delete('/delete/:id', (req, res) => {
-    let searchQuery = { _id: req.params.id };
-
-    Book.deleteOne(searchQuery)
-        .then(book => {
-            req.flash('success_msg', 'Book deleted successfully.')
-            res.redirect('/');
-        })
-        .catch(err => {
-            req.flash('error_msg', 'ERROR: ' + err)
-            res.redirect('/');
-        });
-});
-
-//delete routes ends here
-module.exports = router;
+module.exports = router
